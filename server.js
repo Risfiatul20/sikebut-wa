@@ -58,6 +58,40 @@ function listDevices() {
 }
 
 /* ============================================================
+ * Cadangan pesan terkirim — WAJIB untuk menjawab "retry receipt"
+ * ============================================================
+ * Kenapa ini ada:
+ * WhatsApp bisa GAGAL mendekripsi pesan yang kita kirim (kunci sesi
+ * Signal belum sinkron). Saat itu penerima mengirim "retry receipt",
+ * dan Baileys menjawabnya dengan memanggil getMessage(key) untuk
+ * mengambil pesan ASLI lalu mengirimnya ulang.
+ *
+ * Tanpa cadangan ini getMessage tak bisa menjawab, dan penerima akan
+ * menampilkan "Menunggu pesan ini. Tindakan ini mungkin membutuhkan
+ * waktu beberapa saat." SELAMANYA.
+ *
+ * (Baileys sendiri menandai ini sebagai todo: "implement a cache to
+ * store the last 256 sent messages" — lihat Socket/messages-recv.js.)
+ * ============================================================ */
+const MAX_PESAN_TERSIMPAN = 512;
+const pesanTerkirim = new Map(); // messageId -> pesan (WAMessage)
+
+function simpanPesanTerkirim(wam) {
+  const id = wam?.key?.id;
+  if (!id) return;
+  pesanTerkirim.set(id, wam);
+  // Map menjaga urutan penyisipan → entri paling awal = paling lama.
+  while (pesanTerkirim.size > MAX_PESAN_TERSIMPAN) {
+    const tertua = pesanTerkirim.keys().next().value;
+    pesanTerkirim.delete(tertua);
+  }
+}
+
+function ambilPesanTerkirim(key) {
+  return pesanTerkirim.get(key?.id);
+}
+
+/* ============================================================
  * Helper nomor WhatsApp
  * ============================================================ */
 function normalizeNumber(raw) {
@@ -128,6 +162,16 @@ async function startDevice(id) {
     browser: ["SIKEBUT Gateway", "Chrome", "1.0.0"],
     markOnlineOnConnect: false,
     syncFullHistory: false,
+    // Wajib: jawab permintaan retry dari penerima yang gagal mendekripsi.
+    // Tanpa ini, pesan kita menggantung di "Menunggu pesan ini..." di HP penerima.
+    getMessage: async (key) => {
+      const ada = ambilPesanTerkirim(key);
+      // Log diagnostik: membuktikan retry benar-benar datang & kita jawab.
+      console.log(
+        `[SIKEBUT-WA] retry receipt diterima id=${key?.id} -> ${ada ? "DIKIRIM ULANG" : "TIDAK ADA di cadangan"}`
+      );
+      return ada;
+    },
   });
 
   const device = {
@@ -222,7 +266,9 @@ async function sendWithFallback(nomorTujuan, pesan, { skipId } = {}) {
 
   for (const dev of candidates) {
     try {
-      await dev.sock.sendMessage(jid, { text: pesan });
+      const terkirim = await dev.sock.sendMessage(jid, { text: pesan });
+      // Simpan agar bisa dikirim ulang saat penerima minta retry (lihat getMessage).
+      simpanPesanTerkirim(terkirim);
       dev.lastSeen = new Date().toISOString();
       return { ok: true, deviceId: dev.id, nomor };
     } catch (e) {

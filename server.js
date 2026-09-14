@@ -8,6 +8,7 @@
  *   Kalau device utama blocked/logged_out/disconnected → otomatis coba backup berikutnya.
  * - Heartbeat tiap 30 detik ke backend Laravel (callback) supaya status device terpantau.
  */
+require("dotenv").config();
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
@@ -449,8 +450,16 @@ app.post("/devices/:id/priority", (req, res) => {
   res.json({ ok: true, priority: p[req.params.id] });
 });
 
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`[SIKEBUT-WA] Gateway jalan di http://127.0.0.1:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  // Alamat LAN dideteksi dinamis (IP bisa berubah saat pindah jaringan).
+  const lanIps = Object.values(require("os").networkInterfaces())
+    .flat()
+    .filter((i) => i && i.family === "IPv4" && !i.internal)
+    .map((i) => i.address);
+  const aksesJaringan = (lanIps.length ? lanIps : ["localhost"])
+    .map((ip) => `http://${ip}:${PORT}`)
+    .join(", ");
+  console.log(`[SIKEBUT-WA] Gateway jalan di http://0.0.0.0:${PORT} (akses dari jaringan: ${aksesJaringan})`);
   console.log(`[SIKEBUT-WA] Backend Laravel: ${LARAVEL_URL}`);
 
   // Auto-load sesi TERSIMPAN & VALID (creds terdaftar) → reconnect otomatis saat

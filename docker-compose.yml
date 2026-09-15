@@ -1,0 +1,81 @@
+# ============================================================
+# SIKEBUT WA Gateway — compose TERPISAH dari backend Laravel,
+# tapi gabung ke network yang sama (app-network).
+#
+# Alur komunikasi (semua lewat Docker DNS, tidak lewat host):
+#   Laravel (sikebut-api-app / queue)  --http://sikebut-wa:3001-->  WA Gateway
+#   WA Gateway  --http://sikebut-api-nginx:80-->  Laravel (callback/heartbeat)
+#
+# Jalankan:
+#   docker network create app-network   # cukup sekali (biasanya sudah dibuat backend)
+#   docker compose up -d --build
+#   docker compose logs -f wa
+# ============================================================
+x-logging: &default-logging
+    driver: "json-file"
+    options:
+        max-size: "10m"
+        max-file: "3"
+
+services:
+    wa:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        image: sikebut-wa:1.0.0
+        container_name: sikebut-wa
+        restart: unless-stopped
+        # Tidak di-publish ke host. Cukup expose di network internal.
+        # (Untuk debug dari komputer lokal, aktifkan baris "ports" di bawah.)
+        expose: ["3001"]
+        # ports:
+        #     - "127.0.0.1:3001:3001"
+        env_file: .env
+        environment:
+            NODE_ENV: production
+            # WAJIB: supaya port bisa diakses container lain
+            HOST: 0.0.0.0
+            WA_PORT: 3001
+            # Data persisten (sesi WA + urutan prioritas device)
+            WA_SESSIONS_DIR: /app/sessions
+            WA_PRIORITY_FILE: /app/sessions/priorities.json
+            # Laravel diakses lewat nginx (1 network: app-network)
+            LARAVEL_URL: ${LARAVEL_URL:-http://sikebut-api-nginx:80}
+            WA_GATEWAY_KEY: ${WA_GATEWAY_KEY:?Set WA_GATEWAY_KEY di file .env}
+            WA_HEARTBEAT_MS: ${WA_HEARTBEAT_MS:-30000}
+        volumes:
+            - wa_sessions:/app/sessions
+        networks:
+            - app-network
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "curl",
+                    "-f",
+                    "-s",
+                    "-H",
+                    "X-Gateway-Key: ${WA_GATEWAY_KEY}",
+                    "http://127.0.0.1:3001/health",
+                ]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 20s
+        logging: *default-logging
+        deploy:
+            resources:
+                limits: { cpus: "0.500", memory: 512M }
+                reservations: { cpus: "0.100", memory: 128M }
+
+networks:
+    # Network milik compose backend (external) — harus sudah dibuat:
+    #   docker network create app-network
+    app-network:
+        external: true
+        name: app-network
+
+volumes:
+    # Isi: folder sesi per device + priorities.json
+    wa_sessions:
+        name: sikebut-wa-sessions

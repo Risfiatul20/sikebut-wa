@@ -267,6 +267,73 @@ Callback types:
 - Check format nomor (harus awali 62 atau 08)
 - Check backend Laravel logs untuk error response
 
+## 🐳 Docker
+
+Jalan terpisah dari backend Laravel, tapi satu **network** (`app-network`) supaya bisa saling panggil lewat nama container.
+
+```
+Laravel (sikebut-api-app / queue) --http://sikebut-wa:3001--> WA Gateway
+WA Gateway --http://sikebut-api-nginx:80/api/v1/wa-gateway/callback--> Laravel
+```
+
+### 1. Siapkan network (cukup sekali)
+
+```bash
+docker network create app-network
+```
+
+> Compose backend (`sikebut-api`) sudah memakai network eksternal `app-network`. Kalau backend belum jalan, network ini harus tetap dibuat dulu.
+
+### 2. Konfigurasi env
+
+```bash
+cp .env.example .env
+```
+
+Isi minimal:
+
+| Variabel | Contoh | Keterangan |
+| --- | --- | --- |
+| `WA_GATEWAY_KEY` | `kunci-panjang-acak` | **Harus sama** dengan `WA_GATEWAY_KEY` di `.env` backend Laravel |
+| `LARAVEL_URL` | `http://sikebut-api-nginx:80` | Alamat Laravel dari dalam container WA |
+| `WA_PORT` | `3001` | Port internal |
+| `WA_HEARTBEAT_MS` | `30000` | Interval heartbeat |
+
+### 3. Tambahkan env di backend Laravel
+
+Tambahkan ke `sikebut-api/.env` (lalu restart service backend):
+
+```env
+WA_GATEWAY_URL=http://sikebut-wa:3001
+WA_GATEWAY_KEY=kunci-panjang-acak   # sama dengan milik WA gateway
+```
+
+Tanpa `WA_GATEWAY_URL`, Laravel memakai default `http://127.0.0.1:3001` yang **tidak akan tembus** dari dalam container.
+
+### 4. Jalankan
+
+```bash
+docker compose up -d --build
+docker compose logs -f wa
+docker compose ps        # status: healthy
+```
+
+### 5. Verifikasi koneksi antar container
+
+```bash
+# Dari container WA -> Laravel
+docker compose exec wa wget -qO- -S http://sikebut-api-nginx:80/api/v1/wa-gateway/callback
+
+# Dari container backend -> WA (pastikan kuncinya sama)
+docker exec sikebut-api-app sh -c 'wget -qO- --header="X-Gateway-Key: $WA_GATEWAY_KEY" http://sikebut-wa:3001/health'
+```
+
+### Catatan penting
+
+- Port `3001` **tidak di-publish** ke host (hanya `expose`) karena API ini internal. Untuk debug lokal, aktifkan blok `ports` di `docker-compose.yml` (sudah disiapkan, tinggal hapus komentar).
+- Sesi WA & `priorities.json` tersimpan di volume `sikebut-wa-sessions`, jadi tetap login walau container di-rebuild.
+- Scan QR cukup sekali lewat halaman admin; setelah itu auto-reconnect.
+
 ## 📝 License
 
 Proprietary - SIKEBUT Project © 2026 Pemerintah Provinsi Sumatera Barat

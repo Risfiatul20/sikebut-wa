@@ -28,7 +28,11 @@ const PORT = Number(process.env.WA_PORT || 3001);
 const GATEWAY_KEY = process.env.WA_GATEWAY_KEY || "sikebut-wa-key-ganti-di-produksi";
 const LARAVEL_URL = (process.env.LARAVEL_URL || "http://localhost:8000").replace(/\/+$/, "");
 const HEARTBEAT_MS = Number(process.env.WA_HEARTBEAT_MS || 30000);
-const SESSIONS_DIR = path.join(__dirname, "sessions");
+// WA_SESSIONS_DIR: default ./sessions. Di Docker diarahkan ke volume (/app/sessions)
+// supaya sesi WA tidak hilang saat container di-rebuild.
+const SESSIONS_DIR = process.env.WA_SESSIONS_DIR
+  ? path.resolve(process.env.WA_SESSIONS_DIR)
+  : path.join(__dirname, "sessions");
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 /* ============================================================
@@ -284,7 +288,11 @@ async function sendWithFallback(nomorTujuan, pesan, { skipId } = {}) {
  * Format JSON: { "wa-utama": 0, "wa-backup": 1 }
  * Default: urutan id → 0,1,2,...
  */
-const PRIORITY_FILE = path.join(__dirname, "priorities.json");
+// WA_PRIORITY_FILE: default ./priorities.json. Di Docker diarahkan ke volume
+// (/app/sessions/priorities.json) supaya urutan device ikut tersimpan.
+const PRIORITY_FILE = process.env.WA_PRIORITY_FILE
+  ? path.resolve(process.env.WA_PRIORITY_FILE)
+  : path.join(__dirname, "priorities.json");
 
 function priorityOf(id) {
   try {
@@ -450,16 +458,23 @@ app.post("/devices/:id/priority", (req, res) => {
   res.json({ ok: true, priority: p[req.params.id] });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+// HOST: default 127.0.0.1 (aman untuk dev lokal).
+//   - Di Docker: set HOST=0.0.0.0 (lihat docker-compose.yml) supaya port bisa dipublish.
+//   - Di jaringan lokal: set HOST=0.0.0.0 di .env agar dashboard WA bisa dibuka dari HP/laptop lain.
+const HOST = process.env.HOST || "127.0.0.1";
+
+app.listen(PORT, HOST, () => {
   // Alamat LAN dideteksi dinamis (IP bisa berubah saat pindah jaringan).
   const lanIps = Object.values(require("os").networkInterfaces())
     .flat()
     .filter((i) => i && i.family === "IPv4" && !i.internal)
     .map((i) => i.address);
-  const aksesJaringan = (lanIps.length ? lanIps : ["localhost"])
-    .map((ip) => `http://${ip}:${PORT}`)
-    .join(", ");
-  console.log(`[SIKEBUT-WA] Gateway jalan di http://0.0.0.0:${PORT} (akses dari jaringan: ${aksesJaringan})`);
+  console.log(`[SIKEBUT-WA] Gateway jalan di http://${HOST}:${PORT}`);
+  if (HOST === "0.0.0.0" && lanIps.length) {
+    console.log(
+      `[SIKEBUT-WA] Akses dari jaringan: ${lanIps.map((ip) => `http://${ip}:${PORT}`).join(", ")}`
+    );
+  }
   console.log(`[SIKEBUT-WA] Backend Laravel: ${LARAVEL_URL}`);
 
   // Auto-load sesi TERSIMPAN & VALID (creds terdaftar) → reconnect otomatis saat
